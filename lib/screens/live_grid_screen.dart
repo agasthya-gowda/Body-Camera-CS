@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -25,19 +26,29 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
   final Set<String> _mutedHostbodies = {};
   final Set<String> _busyHostbodies = {};
   final Map<String, _CameraStream> _streams = {};
+  final Map<String, int> _batteryLevels = {};
+  Timer? _refreshTimer;
 
   bool get _isDark => AppTheme.isDark(context);
+
+  String _idOf(Map<String, dynamic> device) =>
+      device['hostbody']?.toString() ?? device['did']?.toString() ?? '';
 
   @override
   void initState() {
     super.initState();
     _loadOnlineDevices();
+    // Cameras go on/offline in real time (their WiFi/hardware, not the app),
+    // so a one-time fetch on open would permanently miss a camera that comes
+    // online moments later. Re-check periodically instead.
+    _refreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshOnlineDevices());
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     for (final entry in _onlineDevices) {
-      final hostbody = entry['hostbody']?.toString() ?? entry['did']?.toString() ?? '';
+      final hostbody = _idOf(entry);
       if (hostbody.isEmpty) continue;
       _apiService.stopVideoCall([hostbody]);
       _apiService.stopAudioCall([hostbody], ["1"]);
@@ -48,31 +59,93 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
     super.dispose();
   }
 
+  Future<List<Map<String, dynamic>>?> _fetchOnlineDevices() async {
+    final result = await _apiService.getOnlineDevices();
+    if (!mounted || result['code'] != 200) return null;
+    final companies = List<Map<String, dynamic>>.from(result['data']?['total'] ?? []);
+    List<Map<String, dynamic>> devices = [];
+    for (var company in companies) {
+      if (company['sub'] != null) {
+        devices.addAll(List<Map<String, dynamic>>.from(company['sub']));
+      }
+    }
+    return devices.where((d) => d['lineon']?.toString() == '1').toList();
+  }
+
   Future<void> _loadOnlineDevices() async {
     setState(() => _isLoadingList = true);
-    final result = await _apiService.getOnlineDevices();
+    final online = await _fetchOnlineDevices();
     if (!mounted) return;
-    if (result['code'] == 200) {
-      final companies = List<Map<String, dynamic>>.from(
-        result['data']?['total'] ?? [],
-      );
-      List<Map<String, dynamic>> devices = [];
-      for (var company in companies) {
-        if (company['sub'] != null) {
-          devices.addAll(List<Map<String, dynamic>>.from(company['sub']));
-        }
-      }
-      final online = devices.where((d) => d['lineon']?.toString() == '1').toList();
-      setState(() {
-        _onlineDevices = online;
-        _isLoadingList = false;
-      });
-      // Kick off a live stream for every online camera at once.
-      for (final device in online) {
-        _startCameraStream(device);
-      }
-    } else {
+    if (online == null) {
       setState(() => _isLoadingList = false);
+      return;
+    }
+    setState(() {
+      _onlineDevices = online;
+      _isLoadingList = false;
+    });
+    _startStreamsStaggered(online);
+    _refreshBatteryLevels(online);
+  }
+
+  // Battery is per physical camera, so it's fetched per-device (one batched
+  // call for everyone currently online) and shown next to that camera's own
+  // name - not a single shared value.
+  Future<void> _refreshBatteryLevels(List<Map<String, dynamic>> devices) async {
+    final ids = devices.map(_idOf).where((id) => id.isNotEmpty).toList();
+    if (ids.isEmpty) return;
+    final result = await _apiService.getDeviceDetail(ids);
+    if (!mounted || result['code'] != 200) return;
+    final details = List<Map<String, dynamic>>.from(result['data'] ?? []);
+    setState(() {
+      for (final d in details) {
+        final id = d['hostbody']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        _batteryLevels[id] = int.tryParse(d['electric']?.toString() ?? '') ?? _batteryLevels[id] ?? 0;
+      }
+    });
+  }
+
+  // Re-checks which cameras are online without disturbing streams already
+  // playing: newly-online cameras get added and start streaming, cameras
+  // that went offline get their stream stopped and card removed.
+  Future<void> _refreshOnlineDevices() async {
+    final online = await _fetchOnlineDevices();
+    if (!mounted || online == null) return;
+
+    final newIds = online.map(_idOf).toSet();
+    final oldIds = _onlineDevices.map(_idOf).toSet();
+
+    final wentOffline = oldIds.difference(newIds);
+    for (final id in wentOffline) {
+      _apiService.stopVideoCall([id]);
+      _apiService.stopAudioCall([id], ["1"]);
+      _streams[id]?.controller?.dispose();
+      _streams.remove(id);
+      _batteryLevels.remove(id);
+    }
+
+    final newlyOnline = online.where((d) => !oldIds.contains(_idOf(d))).toList();
+
+    setState(() => _onlineDevices = online);
+
+    if (newlyOnline.isNotEmpty) {
+      _startStreamsStaggered(newlyOnline);
+    }
+    _refreshBatteryLevels(online);
+  }
+
+  // Starting even 2 cameras at the exact same instant has caused real native
+  // crashes (SIGSEGV) on this device - the hardware video decoder can't
+  // reliably take 2 simultaneous RTSP connections at once. Every camera in
+  // the batch starts ~0.8s after the previous one.
+  void _startStreamsStaggered(List<Map<String, dynamic>> devices) {
+    const staggerGap = Duration(milliseconds: 800);
+    for (var i = 0; i < devices.length; i++) {
+      final device = devices[i];
+      Future.delayed(staggerGap * i, () {
+        if (mounted) _startCameraStream(device);
+      });
     }
   }
 
@@ -297,6 +370,8 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
+                                if (_batteryLevels.containsKey(hostbody))
+                                  _batteryBadge(_batteryLevels[hostbody]!),
                               ],
                             ),
                           ),
@@ -354,6 +429,26 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
                     );
                   },
                 ),
+    );
+  }
+
+  Widget _batteryBadge(int level) {
+    final color = level <= 20 ? Colors.redAccent : (level <= 50 ? Colors.amberAccent : Colors.greenAccent);
+    final icon = level <= 20
+        ? Icons.battery_alert
+        : level <= 50
+            ? Icons.battery_4_bar
+            : Icons.battery_full;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 3),
+        Text(
+          '$level%',
+          style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold),
+        ),
+      ],
     );
   }
 

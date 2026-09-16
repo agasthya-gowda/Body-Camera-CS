@@ -300,13 +300,14 @@ class _LocationHistoryScreenState extends State<LocationHistoryScreen> {
       _errorMsg = null;
     });
 
-    final startTs = (_startTime.millisecondsSinceEpoch ~/ 1000).toString();
-    final endTs = (_endTime.millisecondsSinceEpoch ~/ 1000).toString();
-
+    // The server expects "YYYY-MM-DD HH:mm:ss", not a raw Unix timestamp -
+    // sending seconds-since-epoch made every query silently return "No
+    // record found" instead of a parse error, so it looked like there was
+    // simply no GPS history when real data existed the whole time.
     final result = await _apiService.getGpsHistory(
       historyHostbody: widget.hostbody,
-      startIn: startTs,
-      endIn: endTs,
+      startIn: _formatForApi(_startTime),
+      endIn: _formatForApi(_endTime),
     );
 
     if (!mounted) return;
@@ -373,6 +374,13 @@ class _LocationHistoryScreenState extends State<LocationHistoryScreen> {
   String _formatDateTime(DateTime dt) {
     return '${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')} '
         '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  // Server-required format for start_in/end_in, per doc + confirmed via
+  // direct testing: "YYYY-MM-DD HH:mm:ss".
+  String _formatForApi(DateTime dt) {
+    String p2(int n) => n.toString().padLeft(2, '0');
+    return '${dt.year}-${p2(dt.month)}-${p2(dt.day)} ${p2(dt.hour)}:${p2(dt.minute)}:${p2(dt.second)}';
   }
 
   Color _speedColor(double speed) {

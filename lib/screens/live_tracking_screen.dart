@@ -37,11 +37,18 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
   Future<void> _init() async {
     await _loadDeviceList();
     await _refreshLocations();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) => _refreshLocations());
+    // Re-check which devices are online on every tick too, not just their
+    // locations - otherwise a camera that comes online after this screen
+    // opens never appears, since _devices was only ever fetched once.
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      await _loadDeviceList();
+      await _refreshLocations();
+    });
   }
 
   Future<void> _loadDeviceList() async {
     final result = await _apiService.getOnlineDevices();
+    if (!mounted) return;
     if (result['code'] == 200) {
       final companies = List<Map<String, dynamic>>.from(
         result['data']?['total'] ?? [],
