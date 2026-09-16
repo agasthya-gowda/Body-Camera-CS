@@ -12,6 +12,12 @@ class _CameraStream {
   String error = '';
 }
 
+class _StorageInfo {
+  final double usedGb;
+  final double totalGb;
+  const _StorageInfo(this.usedGb, this.totalGb);
+}
+
 class LiveGridScreen extends StatefulWidget {
   const LiveGridScreen({super.key});
 
@@ -27,6 +33,7 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
   final Set<String> _busyHostbodies = {};
   final Map<String, _CameraStream> _streams = {};
   final Map<String, int> _batteryLevels = {};
+  final Map<String, _StorageInfo> _storageByHostbody = {};
   Timer? _refreshTimer;
 
   bool get _isDark => AppTheme.isDark(context);
@@ -88,9 +95,9 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
     _refreshBatteryLevels(online);
   }
 
-  // Battery is per physical camera, so it's fetched per-device (one batched
-  // call for everyone currently online) and shown next to that camera's own
-  // name - not a single shared value.
+  // Battery and storage are per physical camera, so they're fetched
+  // per-device (one batched call for everyone currently online) and shown
+  // next to that camera's own name - not a single shared value.
   Future<void> _refreshBatteryLevels(List<Map<String, dynamic>> devices) async {
     final ids = devices.map(_idOf).where((id) => id.isNotEmpty).toList();
     if (ids.isEmpty) return;
@@ -102,6 +109,20 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
         final id = d['hostbody']?.toString() ?? '';
         if (id.isEmpty) continue;
         _batteryLevels[id] = int.tryParse(d['electric']?.toString() ?? '') ?? _batteryLevels[id] ?? 0;
+
+        // Real server returns capacity/totalcapacity already in GB (e.g.
+        // "57.65G", 57.79) with a trailing unit letter on capacity - strip
+        // anything that isn't part of the number, same parsing as the
+        // dashboard's storage card.
+        final used = double.tryParse(
+          d['capacity']?.toString().replaceAll(RegExp(r'[^0-9.]'), '') ?? '',
+        );
+        final total = double.tryParse(
+          d['totalcapacity']?.toString().replaceAll(RegExp(r'[^0-9.]'), '') ?? '',
+        );
+        if (used != null && total != null) {
+          _storageByHostbody[id] = _StorageInfo(used, total);
+        }
       }
     });
   }
@@ -123,6 +144,7 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
       _streams[id]?.controller?.dispose();
       _streams.remove(id);
       _batteryLevels.remove(id);
+      _storageByHostbody.remove(id);
     }
 
     final newlyOnline = online.where((d) => !oldIds.contains(_idOf(d))).toList();
@@ -370,6 +392,10 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
+                                if (_storageByHostbody.containsKey(hostbody)) ...[
+                                  _storageBadge(_storageByHostbody[hostbody]!),
+                                  const SizedBox(width: 12),
+                                ],
                                 if (_batteryLevels.containsKey(hostbody))
                                   _batteryBadge(_batteryLevels[hostbody]!),
                               ],
@@ -429,6 +455,34 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
                     );
                   },
                 ),
+    );
+  }
+
+  Widget _storageBadge(_StorageInfo storage) {
+    // Exact precision (2 decimals), matching what the camera's own display
+    // shows - no rounding to whole numbers, since that made it disagree
+    // with the physical camera (e.g. showing "116" when the camera itself
+    // showed "115.53").
+    String exact(double gb) => gb.toStringAsFixed(2);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'Used ',
+          style: TextStyle(
+            color: _isDark ? Colors.white38 : Colors.grey[500],
+            fontSize: 11,
+          ),
+        ),
+        Text(
+          '${exact(storage.usedGb)}/${exact(storage.totalGb)}GB',
+          style: TextStyle(
+            color: _isDark ? Colors.white54 : Colors.grey[600],
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
     );
   }
 

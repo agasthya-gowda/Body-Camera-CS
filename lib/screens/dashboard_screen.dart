@@ -1644,8 +1644,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         const SizedBox(height: 14),
                         _buildActionCardsRow(),
                         const SizedBox(height: 14),
-                        _buildStorageCard(),
-                        const SizedBox(height: 14),
                         _buildAdminShortcuts(),
                         const SizedBox(height: 20),
                       ],
@@ -2048,97 +2046,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  // ---- Device Storage card ----
-  Widget _buildStorageCard() {
-    final usedPercent = _storageTotal > 0 ? _storageUsed / _storageTotal : 0.0;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: _isDark ? kSurfaceDark : Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: _isDark
-              ? Colors.white.withOpacity(0.05)
-              : Colors.grey.withOpacity(0.2),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'DEVICE STORAGE',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                  color: const Color(0xFF4A9EFF),
-                ),
-              ),
-              Text(
-                'BWC Hardware NVMe',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: _isDark ? Colors.white38 : Colors.grey,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Used Space',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: _isDark ? Colors.white : Colors.black87,
-                ),
-              ),
-              Text(
-                '${_storageUsed.toStringAsFixed(1)} / ${_storageTotal.toStringAsFixed(1)} GB',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF4A9EFF),
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: usedPercent,
-              backgroundColor: _isDark
-                  ? Colors.white.withOpacity(0.1)
-                  : Colors.grey[200],
-              valueColor: AlwaysStoppedAnimation<Color>(
-                usedPercent > 0.8 ? Colors.red : const Color(0xFF4A9EFF),
-              ),
-              minHeight: 10,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Estimated 12 hours recording remaining at 1080p high definition',
-            style: TextStyle(
-              fontSize: 10,
-              fontStyle: FontStyle.italic,
-              color: _isDark ? Colors.white38 : Colors.grey,
-            ),
-          ),
-        ],
       ),
     );
   }
