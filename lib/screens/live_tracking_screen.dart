@@ -43,7 +43,9 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
   Future<void> _loadDeviceList() async {
     final result = await _apiService.getOnlineDevices();
     if (result['code'] == 200) {
-      final companies = List<Map<String, dynamic>>.from(result['data'] ?? []);
+      final companies = List<Map<String, dynamic>>.from(
+        result['data']?['total'] ?? [],
+      );
       List<Map<String, dynamic>> devices = [];
       for (var company in companies) {
         if (company['sub'] != null) {
@@ -51,7 +53,7 @@ class _LiveTrackingScreenState extends State<LiveTrackingScreen> {
         }
       }
       setState(() {
-        _devices = devices.where((d) => d['lineon'] == 1).toList();
+        _devices = devices.where((d) => d['lineon']?.toString() == '1').toList();
       });
     }
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import '../widgets/responsive_content.dart';
 
 class RecordingScreen extends StatefulWidget {
   const RecordingScreen({super.key});
@@ -88,7 +89,8 @@ class _RecordingScreenState extends State<RecordingScreen> {
         title: const Text('Recording'),
       ),
       body: SafeArea(
-        child: Padding(
+        child: ResponsiveContent(
+          child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
@@ -247,6 +249,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
                 ),
               ],
             ],
+          ),
           ),
         ),
       ),

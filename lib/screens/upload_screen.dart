@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import '../widgets/responsive_content.dart';
 
 class UploadScreen extends StatefulWidget {
   const UploadScreen({super.key});
@@ -116,7 +117,8 @@ class _UploadScreenState extends State<UploadScreen> {
         ],
       ),
       body: SafeArea(
-        child: Padding(
+        child: ResponsiveContent(
+          child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
@@ -209,6 +211,7 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
               ),
             ],
+          ),
           ),
         ),
       ),

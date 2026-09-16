@@ -18,7 +18,7 @@ class _MessagesListScreenState extends State<MessagesListScreen> {
   final ApiService _apiService = ApiService();
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _messages = [];
-  Map<String, dynamic> _messTypes = {};
+  List<String> _messTypes = [];
   String? _webRoot;
   bool _isLoading = true;
   Timer? _debounceTimer;
@@ -55,7 +55,9 @@ class _MessagesListScreenState extends State<MessagesListScreen> {
       final data = result['data'];
       setState(() {
         _messages = List<Map<String, dynamic>>.from(data['list'] ?? []);
-        _messTypes = Map<String, dynamic>.from(data['messtype'] ?? {});
+        // Real server returns messtype as a list of category names, indexed
+        // by the numeric "type" field on each message (not a map).
+        _messTypes = List<String>.from(data['messtype'] ?? []);
         _webRoot = data['web_root'];
         _isLoading = false;
       });
@@ -492,7 +494,7 @@ class _MessagesListScreenState extends State<MessagesListScreen> {
               final result = await _apiService.getOnlineDevices();
               if (result['code'] == 200) {
                 final companies = List<Map<String, dynamic>>.from(
-                  result['data'] ?? [],
+                  result['data']?['total'] ?? [],
                 );
                 List<Map<String, dynamic>> flatDevices = [];
                 for (var company in companies) {
@@ -742,7 +744,7 @@ class _MessagesListScreenState extends State<MessagesListScreen> {
                                 final isSelected = selectedDeviceIds.contains(
                                   deviceId,
                                 );
-                                final isOnline = device['lineon'] == 1;
+                                final isOnline = device['lineon']?.toString() == '1';
                                 return GestureDetector(
                                   onTap: () {
                                     setSheetState(() {
@@ -1174,8 +1176,15 @@ class _MessagesListScreenState extends State<MessagesListScreen> {
                             }
                             final message = _messages[index - 1];
                             final isSent = message['flag'] == '1';
+                            final typeIndex = int.tryParse(
+                              message['type']?.toString() ?? '',
+                            );
                             final typeLabel =
-                                _messTypes[message['type']] ?? 'Notice';
+                                (typeIndex != null &&
+                                    typeIndex >= 0 &&
+                                    typeIndex < _messTypes.length)
+                                ? _messTypes[typeIndex]
+                                : 'Notice';
 
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 10),

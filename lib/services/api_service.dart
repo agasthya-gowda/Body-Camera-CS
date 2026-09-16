@@ -1,12 +1,49 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // TODO: Replace with real server IP/domain once received from CEO/vendor
-  static const String baseUrl = "http://localhost:3000";
+  static const String baseUrl = "http://116.73.243.111:8080";
+  static const String _sessionPrefsKey = 'session_cookie';
 
-  String? _sessionCookie;
+  // Static (shared across all instances) because nearly every screen creates
+  // its own `ApiService()` rather than reusing one shared instance - an
+  // instance field here would mean each screen's requests carry no session
+  // cookie at all except on the screen that actually called login().
+  static String? _sessionCookie;
+
+  // ---------------- SESSION PERSISTENCE ----------------
+  // The server only cares that requests carry a still-valid PHPSESSID - it
+  // doesn't matter whether that cookie came from a fresh login or one saved
+  // from a previous app run. Saving it lets the app skip the login screen
+  // after being fully closed and reopened, as long as the server session
+  // (kept alive by the 20s heartbeat while the app was last running) hasn't
+  // since expired.
+  static Future<void> _persistSessionCookie() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_sessionCookie != null) {
+      await prefs.setString(_sessionPrefsKey, _sessionCookie!);
+    } else {
+      await prefs.remove(_sessionPrefsKey);
+    }
+  }
+
+  // Loads a previously saved cookie (if any) and confirms the server still
+  // accepts it via the heartbeat endpoint. Returns true if the restored
+  // session is valid, meaning the caller can skip straight to the dashboard.
+  static Future<bool> restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_sessionPrefsKey);
+    if (saved == null) return false;
+    _sessionCookie = saved;
+    final valid = await ApiService().sendHeartbeat();
+    if (!valid) {
+      _sessionCookie = null;
+      await prefs.remove(_sessionPrefsKey);
+    }
+    return valid;
+  }
 
   // ---------------- LOGIN ----------------
   Future<Map<String, dynamic>> login(String username, String password) async {
@@ -41,6 +78,7 @@ class ApiService {
         Match? match = regex.firstMatch(rawCookie);
         if (match != null) {
           _sessionCookie = match.group(0);
+          await _persistSessionCookie();
         }
       }
 
@@ -60,6 +98,8 @@ class ApiService {
       );
       // Also clear the platform heartbeat (per doc: /rest/other/user/del_online, GET)
       await clearHeartbeat();
+      _sessionCookie = null;
+      await _persistSessionCookie();
       return jsonDecode(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};

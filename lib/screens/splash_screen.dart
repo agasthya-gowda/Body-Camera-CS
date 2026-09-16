@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'login_screen.dart';
+import 'dashboard_screen.dart';
+import '../services/api_service.dart';
 
 // ── Brand constants ──
 const Color _kBrandNavy = Color(0xFF0A1628);
@@ -107,6 +109,11 @@ class _SplashScreenState extends State<SplashScreen>
   bool get _ballTextVisible => _phase.index >= _SplashPhase.ballAndText.index;
   bool get _isDark => _phase == _SplashPhase.logoZoom;
 
+  // Kicked off immediately so it resolves well before the animation ends,
+  // meaning re-opening the app doesn't feel slower even though it now checks
+  // for a still-valid saved session.
+  late final Future<bool> _sessionRestore = ApiService.restoreSession();
+
   @override
   void initState() {
     super.initState();
@@ -194,9 +201,11 @@ class _SplashScreenState extends State<SplashScreen>
       }),
     );
 
-    // 5650ms: reveal login directly (no extra fade, matches reference)
+    // 5650ms: reveal login (or the dashboard directly, if a saved session is
+    // still valid) - no extra fade, matches reference.
     _timers.add(
-      Timer(const Duration(milliseconds: 5650), () {
+      Timer(const Duration(milliseconds: 5650), () async {
+        final hasValidSession = await _sessionRestore;
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
@@ -204,7 +213,7 @@ class _SplashScreenState extends State<SplashScreen>
             transitionDuration: Duration.zero,
             reverseTransitionDuration: Duration.zero,
             pageBuilder: (context, animation, secondaryAnimation) =>
-                const LoginScreen(),
+                hasValidSession ? const DashboardScreen() : const LoginScreen(),
             transitionsBuilder:
                 (context, animation, secondaryAnimation, child) => child,
           ),

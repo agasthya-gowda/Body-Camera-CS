@@ -387,12 +387,28 @@
 //     );
 //   }
 // }
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 import 'recording_screen.dart';
 import '../services/api_service.dart';
 
 class LiveViewScreen extends StatefulWidget {
-  const LiveViewScreen({super.key});
+  final String hostbody;
+  final String imei;
+  final String officerName;
+
+  final String? location;
+  final int? batteryLevel;
+
+  const LiveViewScreen({
+    super.key,
+    required this.hostbody,
+    required this.imei,
+    this.officerName = 'Officer',
+    this.location,
+    this.batteryLevel,
+  });
 
   @override
   State<LiveViewScreen> createState() => _LiveViewScreenState();
@@ -402,7 +418,6 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
   bool _isMuted = false;
   bool _isRecording = false;
   String _currentTime = '';
-  String _location = '12.9716° N, 77.5946° E · MG Road, Bengaluru';
   final ApiService _apiService = ApiService();
   bool _isStreaming = false;
   bool _isConnecting = true;
@@ -412,10 +427,14 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
   String _streamError = '';
   String? _lastAction;
   bool _isMenuOpen = false;
-  // TODO: This should come from the selected device on dashboard, hardcoded for now
-  final String _hostbody = "0300098";
-  final String _imei = "864156025728283";
-  final String _officerName = "Agasthya Gowda";
+  VideoPlayerController? _videoController;
+  bool _isBuffering = false;
+  int _bufferAttempt = 0;
+  static const int _maxBufferAttempts = 3;
+  String get _hostbody => widget.hostbody;
+  String get _imei => widget.imei;
+  String get _officerName => widget.officerName;
+  String get _location => widget.location ?? 'Location unavailable';
 
   @override
   void initState() {
@@ -431,13 +450,60 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
 
     if (result['code'] == 200 && streams.isNotEmpty) {
       final streamData = streams[0];
+      // "rtsp" is the server's own internal loopback address (127.0.0.1) -
+      // meant for the server's own use, unreachable from any other device.
+      // "mapped_rtsp" is the externally-reachable address; that's what an
+      // actual phone/browser needs to connect to.
+      final rtspUrl = streamData['mapped_rtsp']?.toString() ?? streamData['rtsp']?.toString();
       setState(() {
-        _rtspUrl = streamData['rtsp'];
+        _rtspUrl = rtspUrl;
         _wsIp = streamData['wsip'];
         _wsPort = streamData['wsport'];
         _isStreaming = true;
         _isConnecting = false;
       });
+      // Vendor confirmed RTSP over the app's own player (their WebSocket player
+      // protocol isn't available to us) - browsers can't play RTSP, so this only
+      // renders on Android/iOS. fvp adds RTSP support to video_player (the
+      // stock package can't play RTSP on its own).
+      if (!kIsWeb && rtspUrl != null && rtspUrl.isNotEmpty) {
+        // Real IP cameras often aren't instantly ready to stream the moment
+        // startLive succeeds, so a fresh RTSP connection can transiently fail
+        // - retry a couple of times before surfacing an error to the user.
+        for (var attempt = 1; attempt <= _maxBufferAttempts; attempt++) {
+          setState(() {
+            _isBuffering = true;
+            _bufferAttempt = attempt;
+          });
+          final controller = VideoPlayerController.networkUrl(Uri.parse(rtspUrl));
+          try {
+            await controller.initialize();
+            if (!mounted) {
+              controller.dispose();
+              return;
+            }
+            await controller.play();
+            setState(() {
+              _videoController = controller;
+              _streamError = '';
+              _isBuffering = false;
+            });
+            break;
+          } catch (e) {
+            controller.dispose();
+            if (attempt == _maxBufferAttempts) {
+              if (mounted) {
+                setState(() {
+                  _streamError = 'Video playback error: $e';
+                  _isBuffering = false;
+                });
+              }
+            } else {
+              await Future.delayed(const Duration(seconds: 2));
+            }
+          }
+        }
+      }
       // Start audio alongside video, per "process for audio calls is same as video calls" (doc para 13)
       await _apiService.startAudioCall([_hostbody]);
     } else {
@@ -455,6 +521,7 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
 
   @override
   void dispose() {
+    _videoController?.dispose();
     _apiService.stopVideoCall([_hostbody]);
     _apiService.stopAudioCall([_hostbody], ["1"]);
     super.dispose();
@@ -615,6 +682,102 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
     Future.delayed(const Duration(seconds: 1), _updateTime);
   }
 
+  Widget _buildVideoContent() {
+    if (kIsWeb) {
+      return _videoStatusMessage(
+        icon: Icons.desktop_access_disabled,
+        title: 'Live video not supported on web',
+        subtitle: 'This vendor only provides RTSP streaming, which browsers '
+            'cannot play. Use the Android app to view BWC-$_hostbody live.',
+      );
+    }
+    if (_isConnecting) {
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Color(0xFF4A9EFF)),
+            SizedBox(height: 16),
+            Text('Connecting to camera…', style: TextStyle(color: Colors.white70, fontSize: 14)),
+          ],
+        ),
+      );
+    }
+    if (_isBuffering) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(color: Color(0xFF4A9EFF)),
+            const SizedBox(height: 16),
+            Text(
+              _bufferAttempt > 1
+                  ? 'Buffering video stream… (attempt $_bufferAttempt of $_maxBufferAttempts)'
+                  : 'Buffering video stream…',
+              style: const TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_streamError.isNotEmpty) {
+      return _videoStatusMessage(
+        icon: Icons.videocam_off,
+        title: 'Camera unavailable',
+        subtitle: _streamError,
+      );
+    }
+    if (_isStreaming && _videoController != null && _videoController!.value.isInitialized) {
+      return Center(
+        child: AspectRatio(
+          aspectRatio: _videoController!.value.aspectRatio,
+          child: VideoPlayer(_videoController!),
+        ),
+      );
+    }
+    return _videoStatusMessage(
+      icon: Icons.videocam_off,
+      title: 'Camera Feed',
+      subtitle: 'RTSP stream negotiated with hardware unit BWC-$_hostbody',
+    );
+  }
+
+  Widget _videoStatusMessage({required IconData icon, required String title, required String subtitle}) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Icon(icon, size: 36, color: Colors.white38),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(title, style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Text(
+              subtitle,
+              style: const TextStyle(color: Colors.white38, fontSize: 11),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -638,57 +801,8 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
                     child: Stack(
                       alignment: Alignment.center,
                       children: [
-                        // Center camera placeholder + pulsing status dot + tactical corner brackets
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Container(
-                                  width: 80,
-                                  height: 80,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.05),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: Colors.white24),
-                                  ),
-                                  child: const Icon(Icons.videocam_off, size: 36, color: Colors.white38),
-                                ),
-                                Positioned(
-                                  top: 0,
-                                  right: 0,
-                                  child: Container(
-                                    width: 12,
-                                    height: 12,
-                                    decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            const Text('Camera Feed',
-                                style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 6),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 40),
-                              child: Text.rich(
-                                TextSpan(
-                                  children: [
-                                    const TextSpan(
-                                        text: 'RTSP / WebSocket stream negotiated with hardware unit ',
-                                        style: TextStyle(color: Colors.white38, fontSize: 11)),
-                                    TextSpan(
-                                        text: 'BWC-$_hostbody',
-                                        style: const TextStyle(
-                                            color: Color(0xFF4A9EFF), fontSize: 11, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          ],
-                        ),
+                        // Real RTSP video when available, otherwise a status placeholder.
+                        Positioned.fill(child: _buildVideoContent()),
 
                         // HUD top-left telemetry
                         Positioned(
@@ -713,12 +827,14 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
                               const Text('RES: 1080P @ 30FPS • AES-256',
                                   style: TextStyle(color: Colors.white54, fontSize: 10, fontFamily: 'monospace')),
                               const SizedBox(height: 2),
-                              const Row(
+                              Row(
                                 children: [
-                                  Icon(Icons.battery_charging_full, size: 11, color: Colors.greenAccent),
-                                  SizedBox(width: 3),
-                                  Text('85% • Buffer Active',
-                                      style: TextStyle(color: Colors.white54, fontSize: 10, fontFamily: 'monospace')),
+                                  const Icon(Icons.battery_charging_full, size: 11, color: Colors.greenAccent),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    '${widget.batteryLevel != null ? '${widget.batteryLevel}%' : '--'} • Buffer Active',
+                                    style: const TextStyle(color: Colors.white54, fontSize: 10, fontFamily: 'monospace'),
+                                  ),
                                 ],
                               ),
                             ],

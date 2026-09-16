@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/responsive_content.dart';
 
 class VideosListScreen extends StatefulWidget {
   const VideosListScreen({super.key});
@@ -80,7 +81,8 @@ class _VideosListScreenState extends State<VideosListScreen> {
         elevation: 0,
       ),
       body: SafeArea(
-        child: Column(
+        child: ResponsiveContent(
+          child: Column(
           children: [
             Container(
               color: Colors.white,
@@ -166,6 +168,7 @@ class _VideosListScreenState extends State<VideosListScreen> {
                     ),
             ),
           ],
+          ),
         ),
       ),
     );

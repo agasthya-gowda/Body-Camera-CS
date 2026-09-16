@@ -1001,7 +1001,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'live_view_screen.dart';
+import 'live_grid_screen.dart';
 import 'recording_screen.dart';
 import 'videos_list_screen.dart';
 import 'upload_screen.dart';
@@ -1071,6 +1071,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       timer,
     ) async {
       final success = await _apiService.sendHeartbeat();
+      if (success) {
+        // Cameras go on/off-line in real time - refresh the dashboard's
+        // battery/storage/GPS on the same cadence as the heartbeat so it
+        // doesn't keep showing whichever device happened to be first/online
+        // when the screen first opened.
+        _loadOnlineDevices();
+      }
       if (!success && mounted) {
         timer.cancel();
         final prefs = await SharedPreferences.getInstance();
@@ -1093,9 +1100,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _loadOnlineDevices() async {
     try {
       // Step 1: Get online device list (hierarchical: company -> sub devices)
+      // Real server wraps the company list under data.total (data itself is an
+      // object also containing a separate "lineon" list), not a bare list.
       final result = await _apiService.getOnlineDevices();
+      if (!mounted) return;
       if (result['code'] == 200) {
-        final companies = List<Map<String, dynamic>>.from(result['data'] ?? []);
+        final companies = List<Map<String, dynamic>>.from(
+          result['data']?['total'] ?? [],
+        );
 
         // Flatten: pull all devices out of each company's "sub" array
         List<Map<String, dynamic>> devices = [];
@@ -1110,9 +1122,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         });
 
         if (devices.isNotEmpty) {
-          final firstDevice = devices[0];
+          // Prefer an actually-online device over just taking index 0 - the
+          // server doesn't guarantee "sub" is ordered by online status.
+          final firstDevice = devices.firstWhere(
+            (d) => d['lineon']?.toString() == '1',
+            orElse: () => devices[0],
+          );
           setState(() {
-            _cameraConnected = firstDevice['lineon'] == 1;
+            _cameraConnected = firstDevice['lineon']?.toString() == '1';
             _gpsActive = true;
           });
 
@@ -1121,6 +1138,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final detailResult = await _apiService.getDeviceDetail([
             firstDevice['did'] ?? '',
           ]);
+          if (!mounted) return;
 
           if (detailResult['code'] == 200) {
             final detailData = List<Map<String, dynamic>>.from(
@@ -1131,16 +1149,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
               setState(() {
                 _batteryLevel =
                     int.tryParse(detail['electric']?.toString() ?? '0') ?? 0;
-                _storageUsed =
-                    (double.tryParse(detail['capacity']?.toString() ?? '0') ??
-                        0) /
-                    1000;
-                _storageTotal =
-                    (double.tryParse(
-                          detail['totalcapacity']?.toString() ?? '0',
-                        ) ??
-                        0) /
-                    1000;
+                // Real server returns capacity/totalcapacity already in GB
+                // (e.g. "57.65G", 57.79) - not MB, so no /1000 conversion.
+                // capacity is a string with a trailing unit letter (e.g. "G"),
+                // so strip anything that isn't part of the number first.
+                _storageUsed = double.tryParse(
+                      detail['capacity']
+                              ?.toString()
+                              .replaceAll(RegExp(r'[^0-9.]'), '') ??
+                          '0',
+                    ) ??
+                    0;
+                _storageTotal = double.tryParse(
+                      detail['totalcapacity']
+                              ?.toString()
+                              .replaceAll(RegExp(r'[^0-9.]'), '') ??
+                          '0',
+                    ) ??
+                    0;
                 _signalType = detail['signal_cate']?.toString() ?? '';
                 _signalStrength = detail['signal']?.toString() ?? '';
                 _deviceLat = detail['latitude']?.toString() ?? '';
@@ -1191,72 +1217,159 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // Guards against a second tap opening a duplicate sheet while the first
+  // tap's device-detail fetch (or the sheet itself) is still in progress -
+  // reset automatically once the sheet closes.
+  bool _isDeviceInfoSheetOpen = false;
+
+  Future<List<Map<String, dynamic>>> _fetchOnlineDeviceDetails() async {
+    final onlineIds = _onlineDevices
+        .where((d) => d['lineon']?.toString() == '1')
+        .map((d) => d['did']?.toString() ?? d['hostbody']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (onlineIds.isEmpty) return [];
+    final result = await _apiService.getDeviceDetail(onlineIds);
+    if (result['code'] == 200) {
+      return List<Map<String, dynamic>>.from(result['data'] ?? []);
+    }
+    return [];
+  }
+
   void _showDeviceInfoSheet() {
+    if (_isDeviceInfoSheetOpen) return;
+    _isDeviceInfoSheetOpen = true;
+
+    // Open the sheet immediately (instant feedback on tap) and fetch the
+    // device details inside it via FutureBuilder, rather than waiting for
+    // the network call to finish before showing anything - that gap with no
+    // visible feedback is what made the button feel unresponsive.
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: _isDark ? kSurfaceDark : Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Device Info',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: _isDark ? Colors.white : const Color(0xFF0A1628),
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.7,
+        minChildSize: 0.35,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => FutureBuilder<List<Map<String, dynamic>>>(
+          future: _fetchOnlineDeviceDetails(),
+          builder: (context, snapshot) {
+            final isLoading = snapshot.connectionState == ConnectionState.waiting;
+            final details = snapshot.data ?? [];
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        isLoading ? 'Device Info' : 'Device Info (${details.length} online)',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _isDark ? Colors.white : const Color(0xFF0A1628),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          Icons.close,
+                          color: _isDark ? Colors.white70 : Colors.black87,
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ],
                   ),
-                ),
-                IconButton(
-                  icon: Icon(
-                    Icons.close,
-                    color: _isDark ? Colors.white70 : Colors.black87,
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : details.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'No cameras currently online',
+                                  style: TextStyle(
+                                    color: _isDark ? Colors.white54 : Colors.grey[600],
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                controller: scrollController,
+                                itemCount: details.length,
+                                separatorBuilder: (_, __) => Divider(
+                                  color: _isDark ? Colors.white12 : Colors.black12,
+                                  height: 28,
+                                ),
+                                itemBuilder: (context, index) => _buildDeviceInfoBlock(details[index]),
+                              ),
                   ),
-                  onPressed: () => Navigator.pop(context),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _sectionLabel('OFFICER'),
-            const SizedBox(height: 8),
-            _infoRow(
-              Icons.badge_outlined,
-              'Officer',
-              '$_deviceHostname ($_deviceHostcode)',
-            ),
-            _infoRow(Icons.apartment_outlined, 'Unit', _deviceUnitname),
-            const SizedBox(height: 12),
-            _sectionLabel('DEVICE STATUS'),
-            const SizedBox(height: 8),
-            _infoRow(
-              _signalType == 'mobile_signal'
-                  ? Icons.signal_cellular_alt
-                  : Icons.wifi,
-              'Signal',
-              '${_signalType == 'mobile_signal' ? 'Mobile' : 'WiFi'} · Strength $_signalStrength/5',
-            ),
-            _infoRow(
-              Icons.my_location_outlined,
-              'Device Location',
-              '$_deviceLat, $_deviceLng',
-            ),
-            _infoRow(Icons.videocam_outlined, 'Device ID', _deviceHostbody),
-            _infoRow(Icons.confirmation_number_outlined, 'IMEI', _deviceImei),
-            _infoRow(Icons.sim_card_outlined, 'SIM Number', _deviceMobile),
-            const SizedBox(height: 8),
-          ],
+                ],
+              ),
+            );
+          },
         ),
       ),
+    ).whenComplete(() {
+      _isDeviceInfoSheetOpen = false;
+    });
+  }
+
+  Widget _buildDeviceInfoBlock(Map<String, dynamic> detail) {
+    final hostbody = detail['hostbody']?.toString() ?? '';
+    final hostname = detail['hostname']?.toString() ?? 'Unknown';
+    final hostcode = detail['hostcode']?.toString() ?? '';
+    final signalCate = detail['signal_cate']?.toString() ?? '';
+    final battery = detail['electric']?.toString() ?? '0';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.podcasts, size: 14, color: Colors.greenAccent),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'BWC-$hostbody',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: _isDark ? Colors.white : const Color(0xFF0A1628),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _sectionLabel('OFFICER'),
+        const SizedBox(height: 8),
+        _infoRow(Icons.badge_outlined, 'Officer', '$hostname ($hostcode)'),
+        _infoRow(Icons.apartment_outlined, 'Unit', detail['unitname']?.toString() ?? ''),
+        const SizedBox(height: 12),
+        _sectionLabel('DEVICE STATUS'),
+        const SizedBox(height: 8),
+        _infoRow(Icons.battery_full, 'Battery', '$battery%'),
+        _infoRow(
+          signalCate == 'mobile_signal' ? Icons.signal_cellular_alt : Icons.wifi,
+          'Signal',
+          '${signalCate == 'mobile_signal' ? 'Mobile' : 'WiFi'} · Strength ${detail['signal']?.toString() ?? '0'}/5',
+        ),
+        _infoRow(
+          Icons.my_location_outlined,
+          'Device Location',
+          '${detail['latitude']}, ${detail['longitude']}',
+        ),
+        _infoRow(Icons.videocam_outlined, 'Device ID', hostbody),
+        _infoRow(Icons.confirmation_number_outlined, 'IMEI', detail['imei']?.toString() ?? ''),
+        _infoRow(Icons.sim_card_outlined, 'SIM Number', detail['mobile']?.toString() ?? ''),
+      ],
     );
   }
 
@@ -1843,10 +1956,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             title: 'Live Feed',
             subtitle: 'RTSP Streaming',
             icon: Icons.videocam,
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const LiveViewScreen()),
-            ),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const LiveGridScreen()),
+              );
+            },
           ),
         ),
         const SizedBox(width: 14),

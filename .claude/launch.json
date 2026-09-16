@@ -4,14 +4,20 @@
     {
       "name": "bwc-flutter-web",
       "runtimeExecutable": "C:\\flutter\\flutter\\bin\\flutter.bat",
-      "runtimeArgs": ["run", "-d", "web-server", "--web-port=8765"],
-      "port": 8765
+      "runtimeArgs": ["run", "-d", "web-server", "--web-port=8768"],
+      "port": 8768
     },
     {
       "name": "bwc-web-release",
       "runtimeExecutable": "py.exe",
       "runtimeArgs": ["-m", "http.server", "8766", "--directory", "C:\\bwc_app\\build\\web"],
       "port": 8766
+    },
+    {
+      "name": "bwc-web-proxy",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\bwc_app\\tools\\web_proxy.js"],
+      "port": 8767
     }
   ]
 }

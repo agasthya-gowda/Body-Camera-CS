@@ -42,7 +42,9 @@ class _SendMessageScreenState extends State<SendMessageScreen> {
     setState(() => _isLoading = true);
     final result = await _apiService.getOnlineDevices();
     if (result['code'] == 200) {
-      final companies = List<Map<String, dynamic>>.from(result['data'] ?? []);
+      final companies = List<Map<String, dynamic>>.from(
+        result['data']?['total'] ?? [],
+      );
       List<Map<String, dynamic>> devices = [];
       for (var company in companies) {
         if (company['sub'] != null) {
@@ -167,12 +169,12 @@ class _SendMessageScreenState extends State<SendMessageScreen> {
                           });
                         },
                         title: Text(device['hostname'] ?? 'Unknown Officer'),
-                        subtitle: Text('Device: $deviceId · ${device['lineon'] == 1 ? "Online" : "Offline"}'),
+                        subtitle: Text('Device: $deviceId · ${device['lineon']?.toString() == '1' ? "Online" : "Offline"}'),
                         secondary: CircleAvatar(
-                          backgroundColor: device['lineon'] == 1 ? Colors.green[50] : Colors.grey[200],
+                          backgroundColor: device['lineon']?.toString() == '1' ? Colors.green[50] : Colors.grey[200],
                           child: Icon(
                             Icons.videocam,
-                            color: device['lineon'] == 1 ? Colors.green : Colors.grey,
+                            color: device['lineon']?.toString() == '1' ? Colors.green : Colors.grey,
                           ),
                         ),
                       ),
