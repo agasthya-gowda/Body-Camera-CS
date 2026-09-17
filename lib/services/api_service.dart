@@ -694,10 +694,6 @@ class ApiService {
     String? productFirm,
     String? capacity,
     String? version,
-    // NOTE: officerName is NOT part of the vendor doc - the API has
-    // no field to bind an officer to a device. Sent as an extra local-only field
-    // for our mock server; harmless to include, real server will just ignore it.
-    String? officerName,
   }) async {
     try {
       Map<String, dynamic> body = {
@@ -709,7 +705,6 @@ class ApiService {
       if (productFirm != null) body['product_firm'] = productFirm;
       if (capacity != null) body['capacity'] = capacity;
       if (version != null) body['version'] = version;
-      if (officerName != null) body['officer_name'] = officerName;
 
       final response = await http.post(
         Uri.parse("$baseUrl/rest/device/device/add"),
@@ -767,10 +762,6 @@ class ApiService {
     String? productFirm,
     String? capacity,
     String? version,
-    // NOTE: officerName and hostbody are NOT part of the vendor doc's Modify Device spec -
-    // local-only fields until we confirm the real server's actual capabilities.
-    String? officerName,
-    String? hostbody,
   }) async {
     try {
       Map<String, dynamic> body = {
@@ -782,8 +773,6 @@ class ApiService {
       if (productFirm != null) body['product_firm'] = productFirm;
       if (capacity != null) body['capacity'] = capacity;
       if (version != null) body['version'] = version;
-      if (officerName != null) body['officer_name'] = officerName;
-      if (hostbody != null) body['hostbody'] = hostbody;
 
       final response = await http.post(
         Uri.parse("$baseUrl/rest/device/device/saveedit"),

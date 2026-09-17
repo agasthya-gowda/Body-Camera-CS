@@ -401,6 +401,12 @@ class LiveViewScreen extends StatefulWidget {
   final String? location;
   final int? batteryLevel;
 
+  // When opened from a screen that's already streaming this camera (e.g. the
+  // Live Feed grid), pass its already-initialized controller here so this
+  // screen just displays it instead of starting a second, redundant RTSP
+  // connection to the same camera from scratch.
+  final VideoPlayerController? existingController;
+
   const LiveViewScreen({
     super.key,
     required this.hostbody,
@@ -408,6 +414,7 @@ class LiveViewScreen extends StatefulWidget {
     this.officerName = 'Officer',
     this.location,
     this.batteryLevel,
+    this.existingController,
   });
 
   @override
@@ -431,6 +438,10 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
   bool _isBuffering = false;
   int _bufferAttempt = 0;
   static const int _maxBufferAttempts = 3;
+  // False when reusing a controller the grid screen already owns - in that
+  // case this screen must not dispose it or stop the video/audio call on
+  // exit, since the grid keeps streaming it in the background.
+  bool _ownsController = true;
   String get _hostbody => widget.hostbody;
   String get _imei => widget.imei;
   String get _officerName => widget.officerName;
@@ -440,7 +451,15 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
   void initState() {
     super.initState();
     _updateTime();
-    _startStream();
+    final existing = widget.existingController;
+    if (existing != null && existing.value.isInitialized) {
+      _ownsController = false;
+      _videoController = existing;
+      _isStreaming = true;
+      _isConnecting = false;
+    } else {
+      _startStream();
+    }
   }
 
   Future<void> _startStream() async {
@@ -521,9 +540,11 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
 
   @override
   void dispose() {
-    _videoController?.dispose();
-    _apiService.stopVideoCall([_hostbody]);
-    _apiService.stopAudioCall([_hostbody], ["1"]);
+    if (_ownsController) {
+      _videoController?.dispose();
+      _apiService.stopVideoCall([_hostbody]);
+      _apiService.stopAudioCall([_hostbody], ["1"]);
+    }
     super.dispose();
   }
 

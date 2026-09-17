@@ -308,6 +308,13 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
     final hostbody = device['hostbody']?.toString() ?? device['did']?.toString() ?? '';
     final imei = device['imei']?.toString() ?? '';
     final officerName = device['hostname']?.toString() ?? 'Officer';
+    // Reuse this camera's already-playing controller instead of opening a
+    // second, redundant RTSP connection to the same camera from scratch.
+    final stream = _streams[hostbody];
+    final existingController =
+        (stream != null && stream.controller != null && stream.controller!.value.isInitialized)
+            ? stream.controller
+            : null;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -315,6 +322,8 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
           hostbody: hostbody,
           imei: imei,
           officerName: officerName,
+          existingController: existingController,
+          batteryLevel: _batteryLevels[hostbody],
         ),
       ),
     );

@@ -45,6 +45,7 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   fvp: ^0.38.1
+  package_info_plus: ^10.2.1
 
 dev_dependencies:
   flutter_test:

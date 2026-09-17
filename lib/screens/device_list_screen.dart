@@ -184,6 +184,14 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   Map<String, dynamic> _deviceStates = {};
   bool _isLoading = true;
 
+  // Per doc Section 6 "All Device list": the API pages results via
+  // page_size/cur_page and returns a "page" object (total_count, page_nums)
+  // to page through them - previously ignored, so a fleet with more than
+  // one page of devices would silently never show the rest.
+  static const int _pageSize = 20;
+  int _currentPage = 1;
+  int _totalPages = 1;
+
   bool get _isDark => AppTheme.isDark(context);
 
   @override
@@ -192,17 +200,23 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _loadDevices();
   }
 
-  Future<void> _loadDevices() async {
+  Future<void> _loadDevices({bool resetPage = false}) async {
+    if (resetPage) _currentPage = 1;
     setState(() => _isLoading = true);
     final searchText = _searchController.text.trim();
     final result = await _apiService.getAllDevices(
       hostkey: searchText.isEmpty ? null : searchText,
+      pageSize: _pageSize,
+      curPage: _currentPage,
     );
     if (result['code'] == 200) {
       final data = result['data'];
+      final page = Map<String, dynamic>.from(data['page'] ?? {});
       setState(() {
         _devices = List<Map<String, dynamic>>.from(data['devicelist'] ?? []);
         _deviceStates = Map<String, dynamic>.from(data['device_state'] ?? {});
+        _totalPages = int.tryParse(page['page_nums']?.toString() ?? '') ?? 1;
+        if (_totalPages < 1) _totalPages = 1;
         _isLoading = false;
       });
     } else {
@@ -213,6 +227,56 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         );
       }
     }
+  }
+
+  void _goToPage(int page) {
+    if (page < 1 || page > _totalPages || page == _currentPage) return;
+    _currentPage = page;
+    _loadDevices();
+  }
+
+  Widget _buildPaginationBar() {
+    final isDark = _isDark;
+    final surface = isDark ? const Color(0xFF0F172A) : Colors.white;
+    final border = isDark ? Colors.white12 : Colors.grey[300]!;
+    final textPrimary = isDark ? Colors.white : const Color(0xFF0A1628);
+    final textFaint = isDark ? Colors.white38 : Colors.grey[500]!;
+
+    Widget navButton(IconData icon, bool enabled, VoidCallback onTap) {
+      return InkWell(
+        onTap: enabled ? onTap : null,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: enabled ? _kAmber500 : border),
+          ),
+          child: Icon(icon, size: 18, color: enabled ? _kAmber400 : textFaint),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: surface,
+        border: Border(top: BorderSide(color: border)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          navButton(Icons.chevron_left, _currentPage > 1, () => _goToPage(_currentPage - 1)),
+          const SizedBox(width: 16),
+          Text(
+            'Page $_currentPage of $_totalPages',
+            style: TextStyle(color: textPrimary, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(width: 16),
+          navButton(Icons.chevron_right, _currentPage < _totalPages, () => _goToPage(_currentPage + 1)),
+        ],
+      ),
+    );
   }
 
   String _stateLabel(String? stateCode) =>
@@ -275,14 +339,18 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     TextInputType? type,
     bool required = false,
     bool mono = false,
+    bool enabled = true,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: TextFormField(
         controller: c,
         keyboardType: type,
+        enabled: enabled,
         style: TextStyle(
-          color: _isDark ? Colors.white : const Color(0xFF0A1628),
+          color: enabled
+              ? (_isDark ? Colors.white : const Color(0xFF0A1628))
+              : (_isDark ? Colors.white38 : Colors.grey[500]),
           fontSize: 13,
           fontFamily: mono ? 'monospace' : null,
         ),
@@ -354,7 +422,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
     final bhController = TextEditingController(text: 'ChipScape Police Dept');
     final hostbodyController = TextEditingController();
-    final officerNameController = TextEditingController();
     final productFirmController = TextEditingController();
     final capacityController = TextEditingController();
     final typesnController = TextEditingController(text: '12');
@@ -507,11 +574,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                             ],
                           ),
                           _sheetField(productFirmController, 'Manufacturer'),
-                          _sheetField(
-                            officerNameController,
-                            'Assigned Officer (optional)',
-                            hint: 'e.g. Agasthya Gowda',
-                          ),
                           const SizedBox(height: 4),
                           SizedBox(
                             width: double.infinity,
@@ -566,13 +628,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                                                     .isEmpty
                                                 ? null
                                                 : versionController.text.trim(),
-                                            officerName:
-                                                officerNameController.text
-                                                    .trim()
-                                                    .isEmpty
-                                                ? null
-                                                : officerNameController.text
-                                                      .trim(),
                                           );
                                       if (!sheetContext.mounted) return;
                                       if (result['code'] == 200) {
@@ -657,11 +712,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
     final bhController = TextEditingController(
       text: device['unitname']?.toString() ?? '',
-    );
-    final officerNameController = TextEditingController(
-      text: device['hostname'] == 'Unassigned'
-          ? ''
-          : (device['hostname']?.toString() ?? ''),
     );
     final hostbodyController = TextEditingController(
       text: device['hostbody']?.toString() ?? '',
@@ -1056,19 +1106,17 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                                 _sheetField(
                                   hostbodyController,
                                   'Device Number',
-                                  hint: 'e.g. 0300100',
                                   required: true,
                                   mono: true,
+                                  // The vendor's Modify Device API has no
+                                  // field to change a device's number -
+                                  // shown here for reference only.
+                                  enabled: false,
                                 ),
                                 _sheetField(
                                   bhController,
                                   'Unit',
                                   required: true,
-                                ),
-                                _sheetField(
-                                  officerNameController,
-                                  'Assigned Officer (optional)',
-                                  hint: 'e.g. Agasthya Gowda',
                                 ),
                                 Text(
                                   'RECORDER MODE (recorderType) *',
@@ -1200,19 +1248,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                                                           : versionController
                                                                 .text
                                                                 .trim(),
-                                                      officerName:
-                                                          officerNameController
-                                                              .text
-                                                              .trim()
-                                                              .isEmpty
-                                                          ? 'Unassigned'
-                                                          : officerNameController
-                                                                .text
-                                                                .trim(),
-                                                      hostbody:
-                                                          hostbodyController
-                                                              .text
-                                                              .trim(),
                                                     );
                                                 if (!sheetContext.mounted)
                                                   return;
@@ -1464,12 +1499,12 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                           icon: Icon(Icons.clear, color: textFaint, size: 18),
                           onPressed: () {
                             _searchController.clear();
-                            _loadDevices();
+                            _loadDevices(resetPage: true);
                           },
                         )
                       : null,
                 ),
-                onSubmitted: (_) => _loadDevices(),
+                onSubmitted: (_) => _loadDevices(resetPage: true),
               ),
             ),
             Expanded(
@@ -1697,6 +1732,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                       ),
                     ),
             ),
+            if (!_isLoading && _totalPages > 1) _buildPaginationBar(),
           ],
         ),
       ),
