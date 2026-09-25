@@ -1013,6 +1013,7 @@ import 'message_history_screen.dart';
 import '../services/api_service.dart';
 import '../theme_controller.dart';
 import '../widgets/responsive_content.dart';
+import '../widgets/app_header.dart';
 import 'dart:async';
 
 // ---- Restyled palette to match the "tactical fleet management" visual direction ----
@@ -1199,8 +1200,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Timer? _heartbeatTimer;
   Timer? _deviceRefreshTimer;
   Timer? _autoSwipeTimer;
-  Timer? _clockTimer;
-  DateTime _now = DateTime.now();
 
   // Visual-only theme toggle, shared app-wide via ThemeController (no backend/logic impact)
   bool get _isDark => AppTheme.isDark(context);
@@ -1216,9 +1215,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     // heartbeat) so "ACTIVE CAMERA" reflects who's actually online right now.
     _deviceRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _loadOnlineDevices();
-    });
-    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _now = DateTime.now());
     });
     _startAutoSwipe();
   }
@@ -1387,7 +1383,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     _heartbeatTimer?.cancel();
     _deviceRefreshTimer?.cancel();
     _autoSwipeTimer?.cancel();
-    _clockTimer?.cancel();
     _radarController.dispose();
     _glowController.dispose();
     _rippleController1.dispose();
@@ -1785,146 +1780,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     );
   }
 
-  // ---- Top App Bar: branding + officer identity ----
-  Widget _buildTopAppBar() {
-    return Container(
-      height: 82,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      decoration: BoxDecoration(
-        color: _isDark ? kBannerStart : Colors.white,
-        border: Border(
-          bottom: BorderSide(
-            color: _isDark
-                ? Colors.white.withOpacity(0.1)
-                : Colors.grey.withOpacity(0.2),
-          ),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.all(3),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(11),
-              child: Image.asset(
-                'assets/images/chipscape_logo.png',
-                fit: BoxFit.cover,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'ChipScape',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.2,
-                    color: _isDark ? Colors.white : kBannerStart,
-                  ),
-                ),
-                Text(
-                  'Security Management System',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: _isDark ? const Color(0xFF9FC1FF) : Colors.blueGrey,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          _buildHeaderClock(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeaderClock() {
-    String p2(int n) => n.toString().padLeft(2, '0');
-    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    final hh = p2(_now.hour);
-    final mm = p2(_now.minute);
-    final ss = p2(_now.second);
-    final weekday = weekdays[_now.weekday - 1];
-    final restOfDate = ', ${months[_now.month - 1]} ${_now.day}';
-    // Green (the "live/on-duty" status color used elsewhere) across the
-    // whole clock - fitting, since this whole block is live/ticking data.
-    const green = Colors.greenAccent;
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: const Color(0xFF4A9EFF).withOpacity(_isDark ? 0.15 : 0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF4A9EFF).withOpacity(0.35)),
-          ),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(text: hh, style: const TextStyle(color: green)),
-                const TextSpan(text: ':', style: TextStyle(color: green)),
-                TextSpan(text: mm, style: const TextStyle(color: green)),
-                const TextSpan(text: ':', style: TextStyle(color: green)),
-                TextSpan(text: ss, style: const TextStyle(color: green)),
-              ],
-            ),
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              fontFamily: 'monospace',
-              letterSpacing: 0.5,
-            ),
-          ),
-        ),
-        const SizedBox(height: 3),
-        Text.rich(
-          TextSpan(
-            children: [
-              TextSpan(
-                text: weekday,
-                style: TextStyle(
-                  color: _isDark ? Colors.white : kBannerStart,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              TextSpan(
-                text: restOfDate,
-                style: TextStyle(color: _isDark ? Colors.white : kBannerStart),
-              ),
-            ],
-          ),
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600),
-        ),
-      ],
-    );
-  }
+  // ---- Top App Bar: shared branding + live clock header ----
+  Widget _buildTopAppBar() => const AppHeader();
 
   // ---- Gradient banner: active camera(s) + quick controls ----
   Widget _buildGradientBanner() {
@@ -1978,23 +1835,27 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: (_isDark ? Colors.greenAccent : Colors.green)
-                            .withOpacity(_isDark ? 0.18 : 0.15),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        '${devices.length} ONLINE',
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.3,
-                          color: _isDark ? Colors.greenAccent : Colors.green[800],
+                    GestureDetector(
+                      onTap: _showAllActiveCamerasSheet,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: (_isDark ? Colors.greenAccent : Colors.green)
+                              .withOpacity(_isDark ? 0.18 : 0.15),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${devices.length} ONLINE',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.3,
+                            color:
+                                _isDark ? Colors.greenAccent : Colors.green[800],
+                          ),
                         ),
                       ),
                     ),
@@ -2019,11 +1880,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 SizedBox(
                   height: 78,
                   child: devices.isEmpty
-                      ? _bannerDeviceContent(
-                          hostbody: _deviceHostbody,
-                          battery: _batteryLevel,
-                          onInfoTap: _showDeviceInfoSheet,
-                        )
+                      ? _noActiveCameraContent()
                       : PageView.builder(
                           controller: _bannerPageController,
                           itemCount: devices.length,
@@ -2090,6 +1947,23 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  // Shown when no camera is currently online - previously this fell back to
+  // whatever the last single-device fetch happened to leave in
+  // _deviceHostbody/_batteryLevel, which could show a stale device name with
+  // 0% battery even though nothing is actually online.
+  Widget _noActiveCameraContent() {
+    return Center(
+      child: Text(
+        'No cameras currently online',
+        style: TextStyle(
+          color: (_isDark ? Colors.white : Colors.black).withOpacity(0.5),
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

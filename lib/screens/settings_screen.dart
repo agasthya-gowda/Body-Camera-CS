@@ -5,6 +5,7 @@ import 'login_screen.dart';
 import '../services/api_service.dart';
 import '../theme_controller.dart';
 import '../widgets/responsive_content.dart';
+import '../widgets/app_header.dart';
 
 const _kBgDark = Color(0xFF0A1628);
 const _kSurfaceDark = Color(0xFF0F172A);
@@ -119,45 +120,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: surface,
-                border: Border(bottom: BorderSide(color: border)),
-              ),
-              child: Row(
-                children: [
-                  if (widget.onBack != null) ...[
-                    IconButton(
-                      onPressed: widget.onBack,
-                      icon: Icon(Icons.arrow_back, color: textPrimary),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                    const SizedBox(width: 10),
-                  ],
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'System Settings',
-                          style: TextStyle(
-                            color: textPrimary,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                          ),
-                        ),
-                        Text(
-                          'Application & Telemetry Preferences',
-                          style: TextStyle(color: textFaint, fontSize: 11),
-                        ),
-                      ],
-                    ),
+            const AppHeader(),
+            if (widget.onBack != null)
+              GestureDetector(
+                onTap: widget.onBack,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
                   ),
-                ],
+                  decoration: BoxDecoration(
+                    color: surface,
+                    border: Border(bottom: BorderSide(color: border)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.arrow_back, size: 18, color: textPrimary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'My Profile',
+                        style: TextStyle(
+                          color: textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
             Expanded(
               child: ResponsiveContent(
                 child: ListView(
@@ -192,7 +185,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                'BWC Mobile Law Enforcement Portal',
+                                'BWC Mobile App',
                                 style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
@@ -203,20 +196,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _appVersion.isEmpty
-                                ? 'Build ...'
-                                : 'Build v$_appVersion',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: textFaint,
-                              fontFamily: 'monospace',
-                            ),
-                          ),
                           const SizedBox(height: 6),
                           Text(
-                            'ChipScape Police Dept • Real-time Body Worn Camera Fleet Management',
+                            'ChipScape — Where Innovation Meets Intelligence. AI-Enabled Surveillance Solutions Built Around You.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 10, color: textFaint),
+                          ),
+                          const SizedBox(height: 12),
+                          Divider(color: border, height: 1),
+                          const SizedBox(height: 12),
+                          Text(
+                            '© 2026 ChipScape. All rights reserved.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 10, color: textFaint),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Support: admin@chipscape.com',
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 10, color: textFaint),
                           ),

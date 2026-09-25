@@ -31,6 +31,11 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
   bool _isLoadingList = true;
   final Set<String> _mutedHostbodies = {};
   final Set<String> _busyHostbodies = {};
+  // Local, phone-side speaker mute - separate from _mutedHostbodies (which
+  // sends a real command to the camera itself). This just silences that
+  // camera's own video player volume on this phone, independently per
+  // camera, and never touches the server.
+  final Set<String> _speakerMutedHostbodies = {};
   final Map<String, _CameraStream> _streams = {};
   final Map<String, int> _batteryLevels = {};
   final Map<String, _StorageInfo> _storageByHostbody = {};
@@ -232,6 +237,11 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
           return;
         }
         await controller.play();
+        // Re-apply this camera's local speaker-mute state if it was already
+        // muted before this stream (re)connected.
+        if (_speakerMutedHostbodies.contains(hostbody)) {
+          controller.setVolume(0.0);
+        }
         setState(() {
           stream.controller = controller;
           stream.isConnecting = false;
@@ -304,6 +314,23 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
     }
   }
 
+  // Local-only: silences/restores this specific camera's own video player
+  // volume on this phone. Independent per camera (each has its own
+  // VideoPlayerController), and doesn't call any API - guaranteed to work
+  // regardless of what the server-side mute command actually does.
+  void _toggleSpeaker(String hostbody) {
+    final controller = _streams[hostbody]?.controller;
+    setState(() {
+      if (_speakerMutedHostbodies.contains(hostbody)) {
+        _speakerMutedHostbodies.remove(hostbody);
+        controller?.setVolume(1.0);
+      } else {
+        _speakerMutedHostbodies.add(hostbody);
+        controller?.setVolume(0.0);
+      }
+    });
+  }
+
   void _openFullScreen(Map<String, dynamic> device) {
     final hostbody = device['hostbody']?.toString() ?? device['did']?.toString() ?? '';
     final imei = device['imei']?.toString() ?? '';
@@ -364,106 +391,212 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
                     ],
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.all(12),
-                  itemCount: _onlineDevices.length,
-                  itemBuilder: (context, index) {
-                    final device = _onlineDevices[index];
-                    final hostbody = device['hostbody']?.toString() ?? device['did']?.toString() ?? '';
-                    final stream = _streams[hostbody];
-                    final isBusy = _busyHostbodies.contains(hostbody);
-                    final isMuted = _mutedHostbodies.contains(hostbody);
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 14),
-                      decoration: BoxDecoration(
-                        color: panelColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
+              : _onlineDevices.length > 2
+                  ? GridView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _onlineDevices.length,
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 12,
+                        mainAxisExtent: 235,
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      itemBuilder: (context, index) => _buildCameraCard(
+                        _onlineDevices[index],
+                        panelColor: panelColor,
+                        textColor: textColor,
+                        videoHeight: 130,
+                        compact: true,
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _onlineDevices.length,
+                      itemBuilder: (context, index) => Padding(
+                        padding: const EdgeInsets.only(bottom: 14),
+                        child: _buildCameraCard(
+                          _onlineDevices[index],
+                          panelColor: panelColor,
+                          textColor: textColor,
+                          videoHeight: 220,
+                        ),
+                      ),
+                    ),
+    );
+  }
+
+  // Same full-detail card (name, storage, battery, live video, all 4 quick
+  // actions) used for both the 1-camera-per-row list (<=2 online) and the
+  // 2-column grid (>2 online) - the header/action rows use Wrap instead of
+  // a rigid Row so they reflow cleanly at the grid's narrower width instead
+  // of overflowing, rather than needing a separate, stripped-down card design.
+  Widget _buildCameraCard(
+    Map<String, dynamic> device, {
+    required Color panelColor,
+    required Color textColor,
+    required double videoHeight,
+    bool compact = false,
+  }) {
+    final hostbody = device['hostbody']?.toString() ?? device['did']?.toString() ?? '';
+    final stream = _streams[hostbody];
+    final isBusy = _busyHostbodies.contains(hostbody);
+    final isMuted = _mutedHostbodies.contains(hostbody);
+    final isSpeakerMuted = _speakerMutedHostbodies.contains(hostbody);
+    return Container(
+      decoration: BoxDecoration(
+        color: panelColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.greenAccent.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: compact
+                // Grid mode (>2 cameras online): narrower cards, so storage/
+                // battery drop to their own wrapping line instead of being
+                // squeezed onto the name's row.
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                            child: Row(
-                              children: [
-                                const Icon(Icons.podcasts, size: 14, color: Colors.greenAccent),
-                                const SizedBox(width: 6),
-                                Expanded(
-                                  child: Text(
-                                    'BWC-$hostbody • ${device['hostname'] ?? 'Unknown'}',
-                                    style: TextStyle(
-                                      color: textColor,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (_storageByHostbody.containsKey(hostbody)) ...[
-                                  _storageBadge(_storageByHostbody[hostbody]!),
-                                  const SizedBox(width: 12),
-                                ],
-                                if (_batteryLevels.containsKey(hostbody))
-                                  _batteryBadge(_batteryLevels[hostbody]!),
-                              ],
+                          const Icon(Icons.podcasts, size: 12, color: Colors.greenAccent),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              'BWC-$hostbody • ${device['hostname'] ?? 'Unknown'}',
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          // ---- Fixed-size live video area ----
-                          GestureDetector(
-                            onTap: () => _openFullScreen(device),
-                            child: SizedBox(
-                              width: double.infinity,
-                              height: 220,
-                              child: _buildStreamArea(stream),
-                            ),
-                          ),
-                          // ---- Quick actions row ----
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            child: isBusy
-                                ? const Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 8),
-                                    child: SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    ),
-                                  )
-                                : Row(
-                                    children: [
-                                      _quickActionButton(
-                                        icon: Icons.camera_alt,
-                                        label: 'Photo',
-                                        onTap: () => _runQuickAction(device, 'takephoto'),
-                                      ),
-                                      _quickActionButton(
-                                        icon: isMuted ? Icons.mic_off : Icons.mic,
-                                        label: isMuted ? 'Unmute' : 'Mute',
-                                        onTap: () => _runQuickAction(device, 'mute'),
-                                        color: isMuted ? Colors.red : null,
-                                      ),
-                                      _quickActionButton(
-                                        icon: Icons.fiber_manual_record,
-                                        label: 'Rec',
-                                        onTap: () => _runQuickAction(device, 'startvideo'),
-                                        color: Colors.redAccent,
-                                      ),
-                                      const Spacer(),
-                                      _quickActionButton(
-                                        icon: Icons.fullscreen,
-                                        label: 'Full screen',
-                                        onTap: () => _openFullScreen(device),
-                                      ),
-                                    ],
-                                  ),
                           ),
                         ],
                       ),
-                    );
-                  },
-                ),
+                      // Storage is skipped in grid mode (>2 cameras) to save
+                      // vertical space per tile - just battery here.
+                      if (_batteryLevels.containsKey(hostbody)) ...[
+                        const SizedBox(height: 4),
+                        _batteryBadge(_batteryLevels[hostbody]!),
+                      ],
+                    ],
+                  )
+                // List mode (<=2 cameras online): original single-line header,
+                // unchanged.
+                : Row(
+                    children: [
+                      const Icon(Icons.podcasts, size: 14, color: Colors.greenAccent),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'BWC-$hostbody • ${device['hostname'] ?? 'Unknown'}',
+                          style: TextStyle(
+                            color: textColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (_storageByHostbody.containsKey(hostbody)) ...[
+                        _storageBadge(_storageByHostbody[hostbody]!),
+                        const SizedBox(width: 12),
+                      ],
+                      if (_batteryLevels.containsKey(hostbody))
+                        _batteryBadge(_batteryLevels[hostbody]!),
+                    ],
+                  ),
+          ),
+          // ---- Fixed-size live video area ----
+          GestureDetector(
+            onTap: () => _openFullScreen(device),
+            child: SizedBox(
+              width: double.infinity,
+              height: videoHeight,
+              child: _buildStreamArea(stream),
+            ),
+          ),
+          // ---- Quick actions row ----
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: isBusy
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : compact
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _quickActionIconButton(
+                            icon: Icons.camera_alt,
+                            onTap: () => _runQuickAction(device, 'takephoto'),
+                          ),
+                          _quickActionIconButton(
+                            icon: isMuted ? Icons.mic_off : Icons.mic,
+                            onTap: () => _runQuickAction(device, 'mute'),
+                            color: isMuted ? Colors.red : null,
+                          ),
+                          _quickActionIconButton(
+                            icon: Icons.fiber_manual_record,
+                            onTap: () => _runQuickAction(device, 'startvideo'),
+                            color: Colors.redAccent,
+                          ),
+                          _quickActionIconButton(
+                            icon: isSpeakerMuted ? Icons.volume_off : Icons.volume_up,
+                            onTap: () => _toggleSpeaker(hostbody),
+                            color: isSpeakerMuted ? Colors.red : null,
+                          ),
+                        ],
+                      )
+                    : Row(
+                    children: [
+                      _quickActionButton(
+                        icon: Icons.camera_alt,
+                        label: 'Photo',
+                        onTap: () => _runQuickAction(device, 'takephoto'),
+                      ),
+                      _quickActionButton(
+                        icon: isMuted ? Icons.mic_off : Icons.mic,
+                        label: isMuted ? 'Unmute' : 'Mute',
+                        onTap: () => _runQuickAction(device, 'mute'),
+                        color: isMuted ? Colors.red : null,
+                      ),
+                      _quickActionButton(
+                        icon: Icons.fiber_manual_record,
+                        label: 'Rec',
+                        onTap: () => _runQuickAction(device, 'startvideo'),
+                        color: Colors.redAccent,
+                      ),
+                      const Spacer(),
+                      _quickActionIconButton(
+                        icon: isSpeakerMuted ? Icons.volume_off : Icons.volume_up,
+                        onTap: () => _toggleSpeaker(hostbody),
+                        color: isSpeakerMuted ? Colors.red : null,
+                      ),
+                      const SizedBox(width: 4),
+                      _quickActionButton(
+                        icon: Icons.fullscreen,
+                        label: 'Full screen',
+                        onTap: () => _openFullScreen(device),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -593,6 +726,24 @@ class _LiveGridScreenState extends State<LiveGridScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // Icon-only version for the grid (>2 cameras online) - same actions, no
+  // text label, so all 4 always fit on a single row at the grid's narrower
+  // card width instead of wrapping to a second line.
+  Widget _quickActionIconButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    Color? color,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Icon(icon, size: 18, color: color ?? (_isDark ? Colors.white70 : Colors.black54)),
       ),
     );
   }

@@ -390,7 +390,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import 'recording_screen.dart';
 import '../services/api_service.dart';
 
 class LiveViewScreen extends StatefulWidget {
@@ -423,6 +422,10 @@ class LiveViewScreen extends StatefulWidget {
 
 class _LiveViewScreenState extends State<LiveViewScreen> {
   bool _isMuted = false;
+  // Local, phone-side speaker mute - separate from _isMuted (which sends a
+  // real command to the camera itself). This just silences this stream's own
+  // video player volume on this phone and never touches the server.
+  bool _isSpeakerMuted = false;
   bool _isRecording = false;
   String _currentTime = '';
   final ApiService _apiService = ApiService();
@@ -457,6 +460,9 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
       _videoController = existing;
       _isStreaming = true;
       _isConnecting = false;
+      // Reflect whatever local speaker-mute state this controller already
+      // has (e.g. muted from the grid screen before opening full-screen).
+      _isSpeakerMuted = existing.value.volume == 0.0;
     } else {
       _startStream();
     }
@@ -548,6 +554,16 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
     super.dispose();
   }
 
+  // Local-only: silences/restores this screen's own video player volume on
+  // this phone. Doesn't call any API - guaranteed to work regardless of
+  // what the server-side mute command actually does.
+  void _toggleSpeaker() {
+    setState(() {
+      _isSpeakerMuted = !_isSpeakerMuted;
+      _videoController?.setVolume(_isSpeakerMuted ? 0.0 : 1.0);
+    });
+  }
+
   Future<void> _toggleMute() async {
     final newMuteState = !_isMuted;
     final commandType = newMuteState ? "startmute" : "stopmute";
@@ -594,13 +610,6 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
         content: Text(result['code'] == 200 ? 'Remote recording started' : 'Failed: ${result['msg']}'),
         backgroundColor: result['code'] == 200 ? Colors.green : Colors.red,
       ),
-    );
-  }
-
-  void _handleBookmark() {
-    setState(() => _lastAction = 'Incident marker bookmarked at $_currentTime');
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Evidence tagged!'), backgroundColor: Colors.green),
     );
   }
 
@@ -1042,79 +1051,53 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
                 color: Color(0xFF020617),
                 border: Border(top: BorderSide(color: Color(0xFF1E293B))),
               ),
-              child: Column(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _flatButton(
-                          icon: Icons.camera_alt,
-                          iconColor: const Color(0xFF4A9EFF),
-                          label: 'Take Photo',
-                          onTap: _takeRemotePhoto,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _flatButton(
-                          icon: Icons.videocam,
-                          iconColor: Colors.amberAccent,
-                          label: 'Remote Rec',
-                          onTap: _startRemoteVideo,
-                        ),
-                      ),
-                    ],
+                  _roundIconButton(
+                    icon: _isMuted ? Icons.mic_off : Icons.mic,
+                    color: _isMuted ? Colors.redAccent : Colors.white70,
+                    background: _isMuted ? Colors.red.withOpacity(0.15) : const Color(0xFF0F172A),
+                    border: _isMuted ? Colors.red.withOpacity(0.4) : const Color(0xFF1E293B),
+                    onTap: _toggleMute,
                   ),
-                  const SizedBox(height: 14),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _roundIconButton(
-                        icon: _isMuted ? Icons.mic_off : Icons.mic,
-                        color: _isMuted ? Colors.redAccent : Colors.white70,
-                        background: _isMuted ? Colors.red.withOpacity(0.15) : const Color(0xFF0F172A),
-                        border: _isMuted ? Colors.red.withOpacity(0.4) : const Color(0xFF1E293B),
-                        onTap: _toggleMute,
+                  _roundIconButton(
+                    icon: _isSpeakerMuted ? Icons.volume_off : Icons.volume_up,
+                    color: _isSpeakerMuted ? Colors.redAccent : Colors.white70,
+                    background: _isSpeakerMuted ? Colors.red.withOpacity(0.15) : const Color(0xFF0F172A),
+                    border: _isSpeakerMuted ? Colors.red.withOpacity(0.4) : const Color(0xFF1E293B),
+                    onTap: _toggleSpeaker,
+                  ),
+                  GestureDetector(
+                    onTap: _startRemoteVideo,
+                    child: Container(
+                      width: 68,
+                      height: 68,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFBE123C), Color(0xFFF43F5E)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: const Color(0xFF020617), width: 4),
+                        boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 16)],
                       ),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const RecordingScreen(),
-                            ),
-                          );
-                        },
+                      child: Center(
                         child: Container(
-                          width: 68,
-                          height: 68,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFFBE123C), Color(0xFFF43F5E)],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: const Color(0xFF020617), width: 4),
-                            boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.4), blurRadius: 16)],
-                          ),
-                          child: Center(
-                            child: Container(
-                              width: 22,
-                              height: 22,
-                              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6)),
-                            ),
-                          ),
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(6)),
                         ),
                       ),
-                      _roundIconButton(
-                        icon: Icons.bookmark,
-                        color: Colors.amberAccent,
-                        background: const Color(0xFF0F172A),
-                        border: const Color(0xFF1E293B),
-                        onTap: _handleBookmark,
-                      ),
-                    ],
+                    ),
+                  ),
+                  _roundIconButton(
+                    icon: Icons.camera_alt,
+                    color: const Color(0xFF4A9EFF),
+                    background: const Color(0xFF0F172A),
+                    border: const Color(0xFF1E293B),
+                    onTap: _takeRemotePhoto,
                   ),
                 ],
               ),
@@ -1136,33 +1119,6 @@ class _LiveViewScreenState extends State<LiveViewScreen> {
           border: Border.all(color: Colors.white24),
         ),
         child: Icon(icon, color: Colors.white, size: 18),
-      ),
-    );
-  }
-
-  Widget _flatButton({
-    required IconData icon,
-    required Color iconColor,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0F172A),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF1E293B)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: iconColor, size: 16),
-            const SizedBox(width: 8),
-            Text(label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
-        ),
       ),
     );
   }

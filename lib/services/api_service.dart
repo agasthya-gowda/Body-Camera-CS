@@ -7,6 +7,25 @@ class ApiService {
   static const String baseUrl = "http://116.73.243.111:8080";
   static const String _sessionPrefsKey = 'session_cookie';
 
+  // Under the new AD/WAD-backed permissions, the server sometimes returns
+  // error messages in Chinese (e.g. a role-restricted account hitting a
+  // module it can't view) instead of English. Decoding every response
+  // through here swaps any non-Latin message text for a generic English
+  // fallback before it ever reaches a screen's UI.
+  dynamic _decodeJson(String body) {
+    final decoded = jsonDecode(body);
+    if (decoded is Map && decoded['msg'] is String) {
+      final msg = decoded['msg'] as String;
+      if (RegExp(r'[^\x00-\x7F]').hasMatch(msg)) {
+        final code = decoded['code'];
+        decoded['msg'] = (code == 401 || code == 403)
+            ? "You don't have permission to access this."
+            : 'Request failed. Please try again or contact your administrator.';
+      }
+    }
+    return decoded;
+  }
+
   // Static (shared across all instances) because nearly every screen creates
   // its own `ApiService()` rather than reusing one shared instance - an
   // instance field here would mean each screen's requests carry no session
@@ -46,43 +65,93 @@ class ApiService {
   }
 
   // ---------------- LOGIN ----------------
+  // Since the vendor added AD/WAD-backed authentication, the login endpoint
+  // now requires two extra things the old flow didn't need (reverse-engineered
+  // directly from the vendor's own web dashboard bundle - chunk-common.js's
+  // "param_up" helper - and confirmed end-to-end with a real session cookie):
+  //   1. A per-session `token`, obtained from a GET call that also issues the
+  //      PHPSESSID this login then authenticates.
+  //   2. A `pe_signals` request signature: sort every field alphabetically as
+  //      "key=value;", append md5("Pe2695jingyi"), URL-encode the result, then
+  //      md5 that. The server rejects the request before ever checking the
+  //      username/password if this doesn't match.
+  // The inner credentials blob also now needs `raw_password` (the plaintext
+  // password) alongside the old MD5 hash, since AD needs the real password to
+  // bind against the directory server.
   Future<Map<String, dynamic>> login(String username, String password) async {
     try {
+      // Step 0: Fetch a fresh login token - this call's Set-Cookie is the
+      // PHPSESSID the login POST below authenticates.
+      final getResponse = await http.get(
+        Uri.parse("$baseUrl/rest/index/login/get?key="),
+      );
+      final cookieHeader = getResponse.headers['set-cookie'];
+      if (cookieHeader != null) {
+        final match = RegExp(r'PHPSESSID=[^;]+').firstMatch(cookieHeader);
+        if (match != null) _sessionCookie = match.group(0);
+      }
+      final basicInfo =
+          jsonDecode(utf8.decode(base64Decode(getResponse.body)));
+      final String token = basicInfo['data']?['page']?['token'] ?? '';
+
       // Step 1: MD5 hash the password (32-char lowercase)
       String md5Password = md5.convert(utf8.encode(password)).toString();
 
-      // Step 2: Build the inner JSON (matches vendor's actual working sample exactly)
+      // Step 2: Build the inner JSON, now including the plaintext password
       Map<String, String> innerJson = {
         "username": username,
         "password": md5Password,
+        "raw_password": password,
         "key": "",
       };
+      String loginInfo =
+          base64Encode(utf8.encode(jsonEncode(innerJson)));
 
-      // Step 3: Base64-encode directly (vendor's own sample proves NO URL-encoding is used,
-      // despite their written instructions saying otherwise)
-      String jsonString = jsonEncode(innerJson);
-      String loginInfo = base64Encode(utf8.encode(jsonString));
+      // Step 3: Build the pe_signals signature exactly as the web login does.
+      // captcha_code "29" and nocache "null" are the literal values the web
+      // login itself sends whenever its (currently disabled) CAPTCHA isn't shown.
+      const captchaCode = '29';
+      const nocache = 'null';
+      final signatureFields = <String, String>{
+        'captcha_code': captchaCode,
+        'login_info': loginInfo,
+        'new_password': 'undefined',
+        'nocache': nocache,
+        'sso': 'undefined',
+        'token': token,
+        'withCredentials': 'true',
+      };
+      final sortedKeys = signatureFields.keys.toList()..sort();
+      final buffer = StringBuffer();
+      for (final key in sortedKeys) {
+        buffer.write('$key=${signatureFields[key]};');
+      }
+      buffer.write(md5.convert(utf8.encode('Pe2695jingyi')).toString());
+      final peSignals = md5
+          .convert(utf8.encode(Uri.encodeComponent(buffer.toString())))
+          .toString();
 
-      // Step 4: Send request
+      final body = jsonEncode({
+        'captcha_code': captchaCode,
+        'login_info': loginInfo,
+        'nocache': nocache,
+        'token': token,
+        'withCredentials': true,
+        'pe_signals': peSignals,
+      });
+
+      // Step 4: Send request, reusing the session cookie captured in Step 0 -
+      // this login call no longer returns a fresh cookie of its own.
       final response = await http.post(
         Uri.parse("$baseUrl/rest/index/login/login"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"login_info": loginInfo}),
+        headers: _authHeaders(),
+        body: body,
       );
 
-      // Step 5: Extract PHPSESSID from cookies (parse clean value, per doc para 50)
-      if (response.headers['set-cookie'] != null) {
-        String rawCookie = response.headers['set-cookie']!;
-        // Extract only "PHPSESSID=value" part, ignoring extra attributes like path/HttpOnly
-        RegExp regex = RegExp(r'PHPSESSID=[^;]+');
-        Match? match = regex.firstMatch(rawCookie);
-        if (match != null) {
-          _sessionCookie = match.group(0);
-          await _persistSessionCookie();
-        }
+      final data = _decodeJson(response.body);
+      if (data['code'] == 200 && _sessionCookie != null) {
+        await _persistSessionCookie();
       }
-
-      final data = jsonDecode(response.body);
       return data;
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
@@ -100,7 +169,7 @@ class ApiService {
       await clearHeartbeat();
       _sessionCookie = null;
       await _persistSessionCookie();
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -113,7 +182,7 @@ class ApiService {
         Uri.parse("$baseUrl/rest/other/user/del_online"),
         headers: _authHeaders(),
       );
-      final data = jsonDecode(response.body);
+      final data = _decodeJson(response.body);
       if (data['code'] == 200) {
         print("Clear heartbeat succeeded: ${data['msg']}");
       } else {
@@ -131,7 +200,7 @@ class ApiService {
         Uri.parse("$baseUrl/rest/other/user/online"),
         headers: _authHeaders(),
       );
-      final data = jsonDecode(response.body);
+      final data = _decodeJson(response.body);
       if (data['code'] == 200) {
         return true;
       } else {
@@ -165,7 +234,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"bh": "bh", "text": "dname"}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -184,7 +253,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"ids": deviceIds}),
       );
-      final result = jsonDecode(response.body);
+      final result = _decodeJson(response.body);
       return {
         "code": result['code'],
         "msg": result['msg'],
@@ -205,7 +274,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"hostbody_arr": hostbodyList}),
       );
-      final result = jsonDecode(response.body);
+      final result = _decodeJson(response.body);
 
       if (result['code'] == 200) {
         // Success case: data is a List
@@ -250,7 +319,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"hostbody_arr": hostbodyList}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -265,7 +334,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"hostbody_arr": hostbodyList}),
       );
-      final result = jsonDecode(response.body);
+      final result = _decodeJson(response.body);
 
       if (result['code'] == 200) {
         return {
@@ -308,7 +377,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"hostbody_arr": hostbodyList, "wsChannelId_arr": wsChannelIdList}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -323,7 +392,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"imei": imei, "type": type}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -358,7 +427,7 @@ class ApiService {
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -393,7 +462,7 @@ class ApiService {
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -424,7 +493,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode(body),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -439,7 +508,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"id": id}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -469,7 +538,7 @@ class ApiService {
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -487,7 +556,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"mess_id": messId, "device": deviceList}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -511,7 +580,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode(body),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -545,7 +614,7 @@ class ApiService {
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -559,7 +628,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"id": id}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -587,7 +656,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode(body),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -605,7 +674,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"ids": deviceIds}),
       );
-      final result = jsonDecode(response.body);
+      final result = _decodeJson(response.body);
       return {
         "code": result['code'],
         "msg": result['msg'],
@@ -636,7 +705,7 @@ class ApiService {
           "end_in": endIn,
         }),
       );
-      final result = jsonDecode(response.body);
+      final result = _decodeJson(response.body);
       return {
         "code": result['code'],
         "msg": result['msg'],
@@ -660,7 +729,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"imei": imei, "type": type}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -677,7 +746,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"imei": imei, "hostbody": hostbody}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -711,7 +780,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode(body),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -745,7 +814,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode(body),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e", "data": {}};
     }
@@ -779,7 +848,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode(body),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
@@ -795,7 +864,7 @@ class ApiService {
         headers: _authHeaders(),
         body: jsonEncode({"id": id}),
       );
-      return jsonDecode(response.body);
+      return _decodeJson(response.body);
     } catch (e) {
       return {"code": 500, "msg": "Connection error: $e"};
     }
